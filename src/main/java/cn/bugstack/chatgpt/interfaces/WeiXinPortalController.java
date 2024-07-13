@@ -36,7 +36,7 @@ public class WeiXinPortalController {
 
     private Logger logger = LoggerFactory.getLogger(WeiXinPortalController.class);
 
-    @Value("${wx.config.originalid:gh_95b2229b90fb}")
+    @Value("${wx.config.originalid:gh_737a9f749590}")
     private String originalId;
 
     @Resource
@@ -53,7 +53,7 @@ public class WeiXinPortalController {
         // 1. 配置文件【可以联系小傅哥获取开发需要的 apihost、apikey】
         Configuration configuration = new Configuration();
         configuration.setApiHost("https://pro-share-aws-api.zcyai.com/");
-        configuration.setApiKey("Bearer 阅读链接评论置顶第一条获取key https://t.zsxq.com/163o5FKvc");
+        configuration.setApiKey("sk-xMfFDTpPdxPiJVbl5cD12543B71f4477B40b24D30a3bDf88");
         // 废弃属性，后续不在使用
 //        configuration.setAuthToken("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4ZmciLCJleHAiOjE2ODM0MTgwOTYsImlhdCI6MTY4MzQxNDQ5NiwianRpIjoiODIyM2FhZWQtOWJiNS00NjE0LTljNGYtNjNiMTBkYWE1YjA3IiwidXNlcm5hbWUiOiJ4ZmcifQ.5rsy5bOOJl1UG5e4IzSDU7YbUUZ4d_ZXHz2wbk1ne58");
         // 2. 会话工厂
