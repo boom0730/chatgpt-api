@@ -1,16 +1,18 @@
 package cn.bugstack.chatgpt.interfaces;
 
+import cn.bugstack.chatglm.model.ChatCompletionRequest;
+import cn.bugstack.chatglm.model.ChatCompletionSyncResponse;
+import cn.bugstack.chatglm.model.Model;
+import cn.bugstack.chatglm.model.Role;
+import cn.bugstack.chatglm.session.Configuration;
+import cn.bugstack.chatglm.session.OpenAiSession;
+import cn.bugstack.chatglm.session.OpenAiSessionFactory;
+import cn.bugstack.chatglm.session.defaults.DefaultOpenAiSessionFactory;
 import cn.bugstack.chatgpt.application.IWeiXinValidateService;
-import cn.bugstack.chatgpt.common.Constants;
-import cn.bugstack.chatgpt.domain.chat.ChatCompletionRequest;
-import cn.bugstack.chatgpt.domain.chat.ChatCompletionResponse;
-import cn.bugstack.chatgpt.domain.chat.Message;
+
 import cn.bugstack.chatgpt.domain.receive.model.MessageTextEntity;
 import cn.bugstack.chatgpt.infrastructure.util.XmlUtil;
-import cn.bugstack.chatgpt.session.Configuration;
-import cn.bugstack.chatgpt.session.OpenAiSession;
-import cn.bugstack.chatgpt.session.OpenAiSessionFactory;
-import cn.bugstack.chatgpt.session.defaults.DefaultOpenAiSessionFactory;
+
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,10 +21,8 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
-import java.util.Collections;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.*;
+import java.util.concurrent.*;
 
 /**
  * @author 小傅哥，微信：fustack
@@ -34,28 +34,29 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequestMapping("/wx/portal/{appid}")
 public class WeiXinPortalController {
 
-    private Logger logger = LoggerFactory.getLogger(WeiXinPortalController.class);
+    private final Logger logger = LoggerFactory.getLogger(WeiXinPortalController.class);
 
-    @Value("${wx.config.originalid:gh_95b2229b90fb}")
+    @Value("${wx.config.originalid:gh_737a9f749590}")
     private String originalId;
 
     @Resource
     private IWeiXinValidateService weiXinValidateService;
 
-    private OpenAiSession openAiSession;
+    private final OpenAiSession openAiSession;
 
     @Resource
     private ThreadPoolTaskExecutor taskExecutor;
 
-    private Map<String, String> chatGPTMap = new ConcurrentHashMap<>();
+    // 存放OpenAi返回结果数据
+    private final Map<String, String> openAiDataMap = new ConcurrentHashMap<>();
+    // 存放OpenAi调用次数数据
+    private final Map<String, Integer> openAiRetryCountMap = new ConcurrentHashMap<>();
 
     public WeiXinPortalController() {
-        // 1. 配置文件【可以联系小傅哥获取开发需要的 apihost、apikey】
+        // 1. 配置文件；智谱Ai申请你的 ApiSecretKey 教程；https://bugstack.cn/md/project/chatgpt/sdk/chatglm-sdk-java.html
         Configuration configuration = new Configuration();
-        configuration.setApiHost("https://pro-share-aws-api.zcyai.com/");
-        configuration.setApiKey("Bearer 阅读链接评论置顶第一条获取key https://t.zsxq.com/163o5FKvc");
-        // 废弃属性，后续不在使用
-//        configuration.setAuthToken("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4ZmciLCJleHAiOjE2ODM0MTgwOTYsImlhdCI6MTY4MzQxNDQ5NiwianRpIjoiODIyM2FhZWQtOWJiNS00NjE0LTljNGYtNjNiMTBkYWE1YjA3IiwidXNlcm5hbWUiOiJ4ZmcifQ.5rsy5bOOJl1UG5e4IzSDU7YbUUZ4d_ZXHz2wbk1ne58");
+        configuration.setApiHost("https://open.bigmodel.cn/");
+        configuration.setApiSecretKey("fdd8b0c64745e2f9a9459e8d2ded2c8a.KOLE1ck54zdKxQct");
         // 2. 会话工厂
         OpenAiSessionFactory factory = new DefaultOpenAiSessionFactory(configuration);
         // 3. 开启会话
@@ -64,9 +65,8 @@ public class WeiXinPortalController {
     }
 
     /**
-     * 这一步主要是验签
-     * 处理微信服务器发来的get请求，进行签名的验证【付费的natapp对接稳定，3块钱域名，9块钱渠道费】
-     * http://xfg.nat300.top/wx/portal/wx470537fb2f5bf897
+     * 处理微信服务器发来的get请求，进行签名的验证
+     * http://xfg-studio.natapp1.cc/wx/portal/wx4bd388e42758df34
      * <p>
      * appid     微信端AppID
      * signature 微信端发来的签名
@@ -99,8 +99,6 @@ public class WeiXinPortalController {
 
     /**
      * 此处是处理微信服务器的消息转发的
-     * 处理消息应答、
-     *
      */
     @PostMapping(produces = "application/xml; charset=UTF-8")
     public String post(@PathVariable String appid,
@@ -114,22 +112,44 @@ public class WeiXinPortalController {
         try {
             logger.info("接收微信公众号信息请求{}开始 {}", openid, requestBody);
             MessageTextEntity message = XmlUtil.xmlToBean(requestBody, MessageTextEntity.class);
-            // 异步任务
-            if (chatGPTMap.get(message.getContent().trim()) == null || "NULL".equals(chatGPTMap.get(message.getContent().trim()))) {
+            logger.info("请求次数：{}", null == openAiRetryCountMap.get(message.getContent().trim()) ? 1 : openAiRetryCountMap.get(message.getContent().trim()));
+
+            // 异步任务【加入超时重试，对于小体量的调用反馈，可以在重试有效次数内返回结果】
+            if (openAiDataMap.get(message.getContent().trim()) == null || "NULL".equals(openAiDataMap.get(message.getContent().trim()))) {
+                String data = "消息处理中，请再回复我一句【" + message.getContent().trim() + "】";
+                // 休眠等待
+                Integer retryCount = openAiRetryCountMap.get(message.getContent().trim());
+                if (null == retryCount) {
+                    if (openAiDataMap.get(message.getContent().trim()) == null) {
+                        doChatGPTTask(message.getContent().trim());
+                    }
+                    logger.info("超时重试：{}", 1);
+                    openAiRetryCountMap.put(message.getContent().trim(), 1);
+                    TimeUnit.SECONDS.sleep(5);
+                    new CountDownLatch(1).await();
+                } else if (retryCount < 2) {
+                    retryCount = retryCount + 1;
+                    logger.info("超时重试：{}", retryCount);
+                    openAiRetryCountMap.put(message.getContent().trim(), retryCount);
+                    TimeUnit.SECONDS.sleep(5);
+                    new CountDownLatch(1).await();
+                } else {
+                    retryCount = retryCount + 1;
+                    logger.info("超时重试：{}", retryCount);
+                    openAiRetryCountMap.put(message.getContent().trim(), retryCount);
+                    TimeUnit.SECONDS.sleep(3);
+                    if (openAiDataMap.get(message.getContent().trim()) != null && !"NULL".equals(openAiDataMap.get(message.getContent().trim()))) {
+                        data = openAiDataMap.get(message.getContent().trim());
+                    }
+                }
+
                 // 反馈信息[文本]
                 MessageTextEntity res = new MessageTextEntity();
                 res.setToUserName(openid);
                 res.setFromUserName(originalId);
                 res.setCreateTime(String.valueOf(System.currentTimeMillis() / 1000L));
                 res.setMsgType("text");
-                res.setContent("消息处理中，请再回复我一句【" + message.getContent().trim() + "】");
-                //异步处理代码如下
-//                if (chatGPTMap.get(message.getContent().trim()) == null) {
-//                    doChatGPTTask(message.getContent().trim());
-//                }
-                if (chatGPTMap.get(message.getContent().trim()) == null) {
-                    doChatGPTTask02(message.getContent().trim());
-                }
+                res.setContent(data);
 
                 return XmlUtil.beanToXml(res);
             }
@@ -140,10 +160,10 @@ public class WeiXinPortalController {
             res.setFromUserName(originalId);
             res.setCreateTime(String.valueOf(System.currentTimeMillis() / 1000L));
             res.setMsgType("text");
-            res.setContent(chatGPTMap.get(message.getContent().trim()));
+            res.setContent(openAiDataMap.get(message.getContent().trim()));
             String result = XmlUtil.beanToXml(res);
             logger.info("接收微信公众号信息请求{}完成 {}", openid, result);
-            chatGPTMap.remove(message.getContent().trim());
+            openAiDataMap.remove(message.getContent().trim());
             return result;
         } catch (Exception e) {
             logger.error("接收微信公众号信息请求{}失败 {}", openid, requestBody, e);
@@ -151,49 +171,33 @@ public class WeiXinPortalController {
         }
     }
 
-    /**
-     * 模型更换，调整为 doChatGPTTask02 调用。对象的 pom.xml 中的 chatgpt-sdk-java 版本调整为 1.0
-     * 【此版本可以直接从maven仓库拉取，也可以从代码库自己 install
-     * 构建 https://gitcode.net/KnowledgePlanet/chatgpt/chatgpt-sdk-java】
-     * @param content
-     */
-    @Deprecated
     public void doChatGPTTask(String content) {
-        //这一句是个占位操作
-        chatGPTMap.put(content, "NULL");
+        openAiDataMap.put(content, "NULL");
         taskExecutor.execute(() -> {
-            // OpenAI 请求
-            // 1. 创建参数
-            ChatCompletionRequest chatCompletion = ChatCompletionRequest
-                    .builder()
-                    .messages(Collections.singletonList(Message.builder().role(Constants.Role.USER).content(content).build()))
-                    .model(ChatCompletionRequest.Model.GPT_3_5_TURBO.getCode())
-                    .build();
-            // 2. 发起请求
-            ChatCompletionResponse chatCompletionResponse = openAiSession.completions(chatCompletion);
-            // 3. 解析结果
-            StringBuilder messages = new StringBuilder();
-            chatCompletionResponse.getChoices().forEach(e -> {
-                messages.append(e.getMessage().getContent());
+            // 入参；模型、请求信息；记得更新最新版 ChatGLM-SDK-Java
+            ChatCompletionRequest request = new ChatCompletionRequest();
+            request.setModel(Model.GLM_3_5_TURBO); // chatGLM_6b_SSE、chatglm_lite、chatglm_lite_32k、chatglm_std、chatglm_pro
+            request.setPrompt(new ArrayList<ChatCompletionRequest.Prompt>() {
+                private static final long serialVersionUID = -7988151926241837899L;
+
+                {
+                    add(ChatCompletionRequest.Prompt.builder()
+                            .role(Role.user.getCode())
+                            .content(content)
+                            .build());
+                }
             });
+            // 同步获取结果
+            try {
+                // 2.1 提供的官网方法
+                ChatCompletionSyncResponse response = openAiSession.completionsSync(request);
+                // 保存数据
+                openAiDataMap.put(content, response.getChoices().get(0).getMessage().getContent());
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
 
-            chatGPTMap.put(content, messages.toString());
         });
-    }
-
-    public void doChatGPTTask02(String content) throws Exception {
-        chatGPTMap.put(content, "NULL");
-        ChatCompletionRequest chatCompletion = ChatCompletionRequest
-                .builder()
-                .messages(Collections.singletonList(Message.builder().role(Constants.Role.USER).content(content).build()))
-                .model(ChatCompletionRequest.Model.GPT_3_5_TURBO.getCode())
-                .stream(true)
-                .build();
-        // 2. 发起请求
-        CompletableFuture<String> chatCompletions = openAiSession.chatCompletions(chatCompletion);
-        // 3. 解析结果
-        String message = chatCompletions.get();
-        chatGPTMap.put(content, message);
     }
 
 }
