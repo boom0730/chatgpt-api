@@ -74,12 +74,12 @@ public class WeiXinPortalController {
      * nonce     微信端发来的随机字符串
      * echostr   微信端发来的验证字符串
      */
-    @GetMapping(produces = "text/plain;charset=utf-8")
-    public String validate(@PathVariable String appid,
-                           @RequestParam(value = "signature", required = false) String signature,
-                           @RequestParam(value = "timestamp", required = false) String timestamp,
-                           @RequestParam(value = "nonce", required = false) String nonce,
-                           @RequestParam(value = "echostr", required = false) String echostr) {
+        @GetMapping(produces = "text/plain;charset=utf-8")
+        public String validate(@PathVariable String appid,
+                @RequestParam(value = "signature", required = false) String signature,
+                @RequestParam(value = "timestamp", required = false) String timestamp,
+                @RequestParam(value = "nonce", required = false) String nonce,
+                @RequestParam(value = "echostr", required = false) String echostr) {
         try {
             logger.info("微信公众号验签信息{}开始 [{}, {}, {}, {}]", appid, signature, timestamp, nonce, echostr);
             if (StringUtils.isAnyBlank(signature, timestamp, nonce, echostr)) {
